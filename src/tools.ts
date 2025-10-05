@@ -8,6 +8,12 @@ import { z } from "zod/v3";
 import type { Chat } from "./server";
 import { getCurrentAgent } from "agents";
 import { scheduleSchema } from "agents/schedule";
+import { lintCode as runLintCode } from "./integrations/lint";
+import {
+  getLocalTimeByLocation,
+  getWeatherByCity
+} from "./integrations/location";
+import { APPROVAL } from "./shared";
 
 /**
  * Weather information tool that requires human confirmation
@@ -27,9 +33,37 @@ const getWeatherInformation = tool({
 const getLocalTime = tool({
   description: "get the local time for a specified location",
   inputSchema: z.object({ location: z.string() }),
-  execute: async ({ location }) => {
-    console.log(`Getting local time for ${location}`);
-    return "10am";
+  execute: async ({ location }) => getLocalTimeByLocation(location)
+});
+
+const lintCode = tool({
+  description:
+    "Lint code snippets or files and report diagnostics with optional safe fixes",
+  inputSchema: z.object({
+    code: z
+      .string()
+      .min(1, "code is required")
+      .describe("The code snippet to lint"),
+    path: z
+      .string()
+      .max(512)
+      .optional()
+      .describe("Optional path to help determine language context"),
+    language: z
+      .enum(["ts", "tsx", "js", "jsx", "json", "typescript", "javascript"])
+      .optional()
+      .describe("Language hint used when no file path is provided"),
+    applyFixes: z
+      .boolean()
+      .default(false)
+      .optional()
+      .describe(
+        "Set to true to include safe automatic fixes alongside diagnostics"
+      )
+  }),
+  execute: async ({ code, path, language, applyFixes }) => {
+    const result = await runLintCode({ code, path, language, applyFixes });
+    return result;
   }
 });
 
@@ -115,6 +149,7 @@ const cancelScheduledTask = tool({
 export const tools = {
   getWeatherInformation,
   getLocalTime,
+  lintCode,
   scheduleTask,
   getScheduledTasks,
   cancelScheduledTask
@@ -126,8 +161,18 @@ export const tools = {
  * Each function here corresponds to a tool above that doesn't have an execute function
  */
 export const executions = {
-  getWeatherInformation: async ({ city }: { city: string }) => {
-    console.log(`Getting weather information for ${city}`);
-    return `The weather in ${city} is sunny`;
+  getWeatherInformation: async (input: unknown) => {
+    const city =
+      typeof input === "string"
+        ? input
+        : input && typeof input === "object" && "city" in input
+          ? String((input as { city: string }).city)
+          : undefined;
+
+    if (!city || city === APPROVAL.YES || city === APPROVAL.NO) {
+      throw new Error("Weather tool missing a valid city argument");
+    }
+
+    return getWeatherByCity(city);
   }
 };

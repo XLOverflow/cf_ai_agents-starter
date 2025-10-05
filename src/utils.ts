@@ -14,6 +14,26 @@ interface ToolContext {
   toolCallId: string;
 }
 
+const pendingToolInputs = new Map<string, unknown>();
+
+function getOriginalToolInput(messages: UIMessage[], toolCallId: string) {
+  for (const message of messages) {
+    if (!message.parts) continue;
+    for (const part of message.parts) {
+      if (!isToolUIPart(part)) continue;
+      if (part.toolCallId !== toolCallId) continue;
+      if (
+        part.input &&
+        part.input !== APPROVAL.YES &&
+        part.input !== APPROVAL.NO
+      ) {
+        return part.input;
+      }
+    }
+  }
+  return undefined;
+}
+
 function isValidToolName<K extends PropertyKey, T extends object>(
   key: K,
   obj: T
@@ -54,13 +74,34 @@ export async function processToolCalls<Tools extends ToolSet>({
             ""
           ) as keyof typeof executions;
 
-          // Only process tools that require confirmation (are in executions object) and are in 'input-available' state
-          if (!(toolName in executions) || part.state !== "input-available")
+          if (!(toolName in executions)) return part;
+
+          const awaitingApproval = part.state === "input-available";
+          const decisionAvailable =
+            (part.state === "output-available" &&
+              (part.output === APPROVAL.YES || part.output === APPROVAL.NO)) ||
+            part.input === APPROVAL.YES ||
+            part.input === APPROVAL.NO;
+
+          if (awaitingApproval) {
+            if (part.input !== APPROVAL.YES && part.input !== APPROVAL.NO) {
+              pendingToolInputs.set(part.toolCallId, part.input);
+            }
             return part;
+          }
+
+          if (!decisionAvailable) {
+            return part;
+          }
+
+          const decision =
+            part.output === APPROVAL.YES || part.output === APPROVAL.NO
+              ? (part.output as string)
+              : (part.input as string);
 
           let result: unknown;
 
-          if (part.input === APPROVAL.YES) {
+          if (decision === APPROVAL.YES) {
             // User approved the tool execution
             if (!isValidToolName(toolName, executions)) {
               return part;
@@ -68,17 +109,29 @@ export async function processToolCalls<Tools extends ToolSet>({
 
             const toolInstance = executions[toolName];
             if (toolInstance) {
-              result = await toolInstance(part.input, {
-                messages: convertToModelMessages(messages),
-                toolCallId: part.toolCallId
-              });
+              const originalInput = pendingToolInputs.get(part.toolCallId);
+              let args = originalInput ?? part.input;
+
+              if (!args || args === APPROVAL.YES || args === APPROVAL.NO) {
+                args = getOriginalToolInput(messages, part.toolCallId);
+              }
+
+              if (!args || args === APPROVAL.YES || args === APPROVAL.NO) {
+                result = "Error: Unable to resolve original tool input";
+              } else {
+                result = await toolInstance(args, {
+                  messages: convertToModelMessages(messages),
+                  toolCallId: part.toolCallId
+                });
+              }
+              pendingToolInputs.delete(part.toolCallId);
             } else {
               result = "Error: No execute function found on tool";
             }
-          } else if (part.input === APPROVAL.NO) {
+          } else if (decision === APPROVAL.NO) {
             result = "Error: User denied access to tool execution";
+            pendingToolInputs.delete(part.toolCallId);
           } else {
-            // If no approval input yet, leave the part as-is for user interaction
             return part;
           }
 
@@ -95,7 +148,8 @@ export async function processToolCalls<Tools extends ToolSet>({
           return {
             ...part,
             state: "output-available" as const,
-            output: result
+            output: result,
+            errorText: undefined
           };
         })
       );

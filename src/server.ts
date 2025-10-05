@@ -61,7 +61,9 @@ export class Chat extends AIChatAgent<Env> {
         });
 
         const result = streamText({
-          system: `You are a helpful assistant that can do various tasks... 
+          system: `You are a helpful assistant that can do various tasks. 
+
+When the user asks for code analysis, linting, or style guidance, use the lintCode tool. Default to applyFixes: false unless the user explicitly requests automatic fixes.
 
 ${getSchedulePrompt({ date: new Date() })}
 

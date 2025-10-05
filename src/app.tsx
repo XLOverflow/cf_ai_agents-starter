@@ -215,6 +215,10 @@ export default function Chat() {
                       <span className="text-[#F48120]">•</span>
                       <span>Local time in different locations</span>
                     </li>
+                    <li className="flex items-center gap-2">
+                      <span className="text-[#F48120]">•</span>
+                      <span>Lint this snippet for potential issues</span>
+                    </li>
                   </ul>
                 </div>
               </Card>
